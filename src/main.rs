@@ -86,6 +86,15 @@ fn main() {
         .arg(Arg::with_name("disable_default_colors")
              .long("disable-default-colors"))
 
+        .arg(Arg::with_name("empty_char")
+             .long("empty-char")
+             .value_name("char")
+             .help(r"Set empty char\n(default:\x20)")
+             .takes_value(true))
+
+        .arg(Arg::with_name("disable_empty_char")
+             .long("disable-empty-char"))
+
         .args(&[
             Arg::with_name("FILE").index(1)
                 .help("Target file")

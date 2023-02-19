@@ -241,6 +241,10 @@ pub const DEFAULT_COLORS: &str =
 48;2;238;238;238:48;5;255";
 
 
+pub const ESC: char = '\x1b';
+pub const CR: &str = "\n";
+
+
 #[macro_export]
 macro_rules! min {
     ( $a:expr, $b:expr )
