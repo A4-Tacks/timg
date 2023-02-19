@@ -1,6 +1,6 @@
 [package]
 name = "timg"
-version = "1.0.0"
+version = "1.0.1"
 authors = ["A4-Tacks <wdsjxhno1001@163.com>"]
 keywords = ["terminal", "image", "term"]
 description = "Display image for terminal (VT100)"

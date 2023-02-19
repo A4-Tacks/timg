@@ -285,10 +285,10 @@ pub fn run(matches: ArgMatches) {
                         }
                         bg_line_buffer.clear();
                         fg_line_buffer.clear();
-                        if line_num == height {
+                        line_num += 1;
+                        if line_num >= height {
                             break 'a;
                         }
-                        line_num += 1;
                         if split_edge {
                             out!("{}{}{}", &clear_ansi, CR, &bg_ansi);
                         } else {
