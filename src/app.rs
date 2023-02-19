@@ -16,10 +16,9 @@ use timg::{
     Rgb,
     pass,
     DEFAULT_COLORS,
+    ESC,
+    CR,
 };
-
-pub const ESC: char = '\x1b';
-pub const CR: &str = "\n";
 
 #[macro_export]
 macro_rules! log {
@@ -88,6 +87,9 @@ pub fn run(matches: ArgMatches) {
     let has_set_size: bool = width != 0 || height != 0;
     let fg_char: &str = get_val!(
         "foreground", "▄", pass);
+    let empty_char: &str = get_val!(
+        "empty_char", "\x20", pass);
+    let enable_empty_char: bool = ! matches.is_present("disable_empty_char");
     let split_edge: bool = ! matches.is_present("no_split_edge");
     let path: &str = match matches.value_of("FILE") {
         Some(x) => x,
@@ -257,12 +259,22 @@ pub fn run(matches: ArgMatches) {
                         }
                         let (mut fg, mut bg): (Rgb, Rgb);
                         let (mut fg_similar, mut bg_similar): (bool, bool); // 是否相似
+                        let mut bg_fg_similar: bool;
+                        let mut target_char: &str;
                         for i in 0..width_usize {
                             bg = bg_line_buffer[i];
                             fg = fg_line_buffer[i];
                             (fg_similar, bg_similar)
                                 = (fg.is_similar(old_fg, opt_level),
                                 bg.is_similar(old_bg, opt_level));
+                            bg_fg_similar = enable_empty_char
+                                && fg.is_similar(bg, opt_level);
+
+                            target_char = if bg_fg_similar {
+                                empty_char
+                            } else {
+                                fg_char
+                            };
 
                             // 更新上一色的缓存
                             if ! fg_similar {
@@ -274,13 +286,13 @@ pub fn run(matches: ArgMatches) {
 
                             // to output_buffer
                             if bg_similar && fg_similar {
-                                out!("{}", fg_char);
+                                out!("{}", target_char);
                             } else if fg_similar {
-                                out!("{}{}", color!(b: bg), fg_char);
+                                out!("{}{}", color!(b: bg), target_char);
                             } else if bg_similar {
-                                out!("{}{}", color!(f: fg), fg_char);
+                                out!("{}{}", color!(f: fg), target_char);
                             } else {
-                                out!("{}{}", color!(bf: bg, fg), fg_char);
+                                out!("{}{}", color!(bf: bg, fg), target_char);
                             }
                         }
                         bg_line_buffer.clear();
