@@ -8,6 +8,7 @@ categories = ["command-line-utilities"]
 license = "GNU General Public License v3.0"
 repository = "https://github.com/A4-Tacks/timg"
 homepage = "https://github.com/A4-Tacks/timg"
+readme = "README.md"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
