@@ -1,6 +1,6 @@
 [package]
 name = "timg"
-version = "1.1.0"
+version = "1.2.0"
 authors = ["A4-Tacks <wdsjxhno1001@163.com>"]
 keywords = ["terminal", "image", "term"]
 description = "Display image for terminal (VT100)"
@@ -15,7 +15,7 @@ edition = "2021"
 
 [dependencies]
 image = "0.24.*"
-imageproc = "0.23.*"
+#imageproc = "0.23.*"
 clap = "2.27.0"
 term_size = "0.3.2"
 

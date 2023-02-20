@@ -95,6 +95,13 @@ fn main() {
         .arg(Arg::with_name("disable_empty_char")
              .long("disable-empty-char"))
 
+        .arg(Arg::with_name("crop_image")
+             .short("c")
+             .long("crop-image")
+             .value_name("range")
+             .help("crop image\n(format:-c 'x,y-w,h') (0f-100f)")
+             .takes_value(true))
+
         .args(&[
             Arg::with_name("FILE").index(1)
                 .help("Target file")

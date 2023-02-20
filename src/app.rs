@@ -1,6 +1,7 @@
 use std::{
     process::exit,
     collections::HashMap,
+    iter::Iterator,
 };
 use image::{
     io::Reader as ImgReader,
@@ -156,9 +157,47 @@ pub fn run(matches: ArgMatches) {
             FilterType::Lanczos3,
             get_filter);
 
+    type ImageCropType = [[f32; 2]; 2];
+    let crop_image_range: Option<ImageCropType>
+        = match matches.value_of("crop_image") {
+            Some(x) => {
+                fn get(x: &str) -> Option<ImageCropType> {
+                    let mut result: ImageCropType = [[0.0; 2]; 2];
+                    let mut tgt
+                        = x.split("-") .map(|x: &str| x.split(","));
+                    for i in 0..2 {
+                        let mut tgt2: std::str::Split<&str> = tgt.next()?;
+                        for j in 0..2 {
+                            result[i][j] = tgt2.next()?.parse().ok()?;
+                        }
+                        if let Some(_) = tgt2.next() { return None; }
+                    }
+                    if let Some(_) = tgt.next() { return None; }
+                    Some(result)
+                }
+                debug_assert_eq!(get("50,50-75,75.3"), Some([[50.0, 50.0], [75.0, 75.3]]));
+                if let Some(result) = get(x) {
+                    Some(result)
+                } else {
+                    log!(e:(2) "FormatError: {:?}", x);
+                }
+            },
+            None => None,
+    };
+
 
     let img = match read_img(path) {
-        Ok(img) => {
+        Ok(mut img) => {
+            let img: DynamicImage // 裁剪后的图片 (如果需要)
+                = if let Some(r) = crop_image_range {
+                    type T = f32;
+                    let (old_width, old_height)
+                        = (img.width() as T / 100.0, img.height() as T / 100.0);
+                    let (x, y): (T, T) = (r[0][0] * old_width, r[0][1] * old_height);
+                    let (new_width, new_height): (T, T)
+                        = (r[1][0] * old_width, r[1][1] * old_height);
+                    img.crop(x as u32, y as u32, new_width as u32, new_height as u32)
+                } else {img};
             let (img_w, img_h): (u32, u32) 
                 = (img.width(), img.height());
             (width, height)
