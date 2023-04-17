@@ -1,355 +1,465 @@
+/// terminal default size.
+/// (width, height)
+/// note: lines is not text line, it is pixel line
+pub const DEFAULT_TERM_SIZE: [SizeType; 2] = [80, 80];
+
 use std::{
-    process::exit,
-    collections::HashMap,
-    iter::Iterator,
+    io::{
+        stdin,
+        Read
+    }
+};
+
+use raw_tty::IntoRawMode;
+use term_lattice::{
+    ScreenBuffer,
+    Color,
+    types::Rgb
+};
+use timg::{ESC, base16_to_unum, num_to_rgb};
+use clap::ArgMatches;
+use term_size::dimensions;
+use timg::{
+    get_scale,
+    SizeType,
+    Position,
+    Float,
 };
 use image::{
-    io::Reader as ImgReader,
     imageops::FilterType,
-    DynamicImage,
-    ImageError,
+    ColorType
 };
-use clap::ArgMatches;
-use timg::{
-    image_size,
-    base16_to_unum,
-    num_to_rgb,
-    Rgb,
-    pass,
-    DEFAULT_COLORS,
-    ESC,
-    CR,
-};
+
+
+const FILTERS: &[FilterType] = &[
+    FilterType::Nearest, FilterType::Triangle,
+    FilterType::CatmullRom, FilterType::Gaussian,
+    FilterType::Lanczos3
+];
+
+pub type Rgba = [u8; 4];
+
+
+/// RGBA color to RGB color
+/// # Examples
+/// ```
+/// use timg::rgba_to_rgb;
+/// assert_eq!(rgba_to_rgb([100, 149, 237, 200], [255; 3]), [164, 195, 240]);
+/// ```
+pub fn rgba_to_rgb(foreground: Rgba, background: Rgb) -> Rgb {
+    macro_rules! int {
+        ( $x:expr ) => {
+            ($x) as u8
+        };
+    }
+    macro_rules! float {
+        ( $x:expr ) => {
+            ($x) as Float
+        };
+    }
+    let [r1, g1, b1, a1] = foreground;
+    let [r2, g2, b2] = background;
+    let alpha = a1 as Float / 255.0;
+    let [r, g, b]: [u8; 3];
+    r = int!(float!(r1) * alpha + float!(r2) * (1.0 - alpha));
+    g = int!(float!(g1) * alpha + float!(g2) * (1.0 - alpha));
+    b = int!(float!(b1) * alpha + float!(b2) * (1.0 - alpha));
+    [r, g, b]
+}
+
 
 #[macro_export]
 macro_rules! log {
-    (e:($code:expr) $( $x:expr ),* ) => {
+    (e:($code:expr) $( $x:expr ),* ) => {{
         log!(e $($x),* );
-        exit($code);
-    };
+        ::std::process::exit($code);
+    }};
     (e $( $x:expr ),* ) => (
         eprintln!( "{}[1;91m{}{0}[0m",
                    ESC, format!($($x),*) ))
 }
 
-fn read_img(path: &str) -> Result<DynamicImage, ImageError> {
-    ImgReader::open(path)?.decode()
-}
 
 pub fn run(matches: ArgMatches) {
-    macro_rules! parse {
-        ( $x:expr ) => {
-            match $x.parse() {
-                Ok(n) => n,
-                Err(_) => {
-                    log!(e:(2)
-                         "ParseError: {:?}", $x);
-                },
+    macro_rules! get_value {
+        ( $name:expr ) => { matches.value_of($name) };
+        ( $name:expr, $default:expr ) => {
+            if let Some(value) = matches.value_of($name) {
+                value
+            } else {
+                $default
             }
         };
     }
-    #[doc = r#"
-    $name
-    $default_value
-    $type_to_target_macro"#]
 
-    macro_rules! get_val {
-        ( $name:expr , $default:expr , $macro:tt )
-            => (match matches.value_of($name) {
-                    None => $default,
-                    Some(w) => $macro!(w)});}
-    macro_rules! get_filter {
-        ( $id:expr ) => (match $id {
-            "0" => FilterType::Nearest,
-            "1" => FilterType::Triangle,
-            "2" => FilterType::CatmullRom,
-            "3" => FilterType::Gaussian,
-            "4" => FilterType::Lanczos3,
-            &_ => {
-                log!(e:(2)
-                     "FilterTypeError: {}",
-                     $id);},
-    });
-    }
-    // env
-    let (term_width, term_height)
-        : (u32, u32)
-        = if let Some((w, h)) = term_size::dimensions() {
-            (w as u32, h as u32 * 2)
+    let back_grounds: &[Rgb] = &get_value!("bgs", "000000,888888,ffffff")
+        .split(",").map(|s| {
+            if s.len() != 6 {
+                log!(e:(3) "StrLenError: {:?} length is {}, need 6.", s, s.len())
+            }
+            num_to_rgb(base16_to_unum(s).unwrap_or_else(|| {
+                log!(e:(3) "StrToHexError: {:?} is not a base16 string.", s)
+            }))
+        }).collect::<Vec<_>>()[..];
+    let zoom_sub_ratio = {
+        let s = get_value!("zoom_ratio", "0.8");
+        let num: Float = s.parse().unwrap_or_else(
+            |e| log!(e:(3) "StrToFloatError: {}", e));
+        if num <= 0.0 || num >= 1.0 {
+            log!(e:(3) "NumberOutOfRange: {} not in (0,1)", num)
+        }
+        num
+    };
+    let zoom_add_ratio = 1.0 / zoom_sub_ratio;
+    let short_move_ratio = {
+        let s = get_value!("short_move_ratio", "0.25");
+        let num: Float = s.parse().unwrap_or_else(
+            |e| log!(e:(3) "StrToFloatError: {}", e));
+        if num <= 0.0 {
+            log!(e:(3) "NumberOutOfRange: {} not in (0,inf)", num)
+        }
+        num
+    };
+    let long_move_ratio = {
+        let s = get_value!("long_move_ratio", "0.75");
+        let num: Float = s.parse().unwrap_or_else(
+            |e| log!(e:(3) "StrToFloatError: {}", e));
+        if num <= 0.0 {
+            log!(e:(3) "NumberOutOfRange: {} not in (0,inf)", num)
+        }
+        num
+    };
+    let default_opt_level = {
+        let s = get_value!("opt_level", "60");
+        let num: SizeType = s.parse().unwrap_or_else(
+            |e| log!(e:(3) "StrToIntError: {}", e));
+        if num <= 0 {
+            log!(e:(3) "NumberOutOfRange: {} not in [0,inf)", num)
+        }
+        num
+    };
+    let set_term_size: Option<Position> = {
+        if let Some(size) = get_value!("term_size") {
+            let nums = size.split(",")
+                .map(|n| n.parse::<SizeType>()
+                     .unwrap_or_else(
+                         |e|
+                         log!(e:(3) "StrToIntError: {}", e)))
+                .collect::<Vec<_>>();
+            if nums.len() != 2 {
+                log!(e:(3) "need length is 2, found {}", nums.len())
+            }
+            Some(Position::new(nums[0], nums[1]))
         } else {
-            (80, 40)
-        };
-
-    // get args
-    let (mut width, mut height): (u32, u32)
-        = (get_val!( "width", 0, parse),
-        get_val!( "height", 0, parse));
-    let abs_size: bool = width != 0 && height != 0;
-    let has_set_size: bool = width != 0 || height != 0;
-    let fg_char: &str = get_val!(
-        "foreground", "▄", pass);
-    let empty_char: &str = get_val!(
-        "empty_char", "\x20", pass);
-    let enable_empty_char: bool = ! matches.is_present("disable_empty_char");
-    let split_edge: bool = ! matches.is_present("no_split_edge");
-    let path: &str = match matches.value_of("FILE") {
-        Some(x) => x,
-        None => {
-            log!(e:(1) "NoFile: append '-H' or '--help'");
-        },
-    };
-    let mut colors: HashMap<String, String> = HashMap::new();
-    {
-        macro_rules! push {
-            ( $x:expr ) => (
-                macro_rules! err {
-                    () => (log!(e:(2) "ColorsFormatError: {:?}", $x));
-                }
-                $x.split(',').map(|x| {
-                    let mut kv = x.split(':');
-                    let k: &str = if let Some(x) = kv.next() {x}
-                        else {err!{}};
-                    let v: &str = if let Some(x) = kv.next() {x}
-                        else {err!{}};
-                    if let Some(_) = kv.next() {err!{}}
-                    colors.insert(k.to_string(), v.to_string());
-                }).last();
-            );
+            None
         }
-        if ! matches.is_present("disable_default_colors") {
-            push!(DEFAULT_COLORS);
+    };
+
+
+    macro_rules! clear_screen {
+        () => {
+            eprint!("\x1b[2J"); // 清空屏幕
+        };
+    }
+    let path = matches
+        .value_of_os("FILE")
+        .unwrap_or_else(|| {
+            log!(e:(1) "GetFileError. use `-H` option print help");
+        });
+    let mut repr_img
+        = image::open(path).unwrap_or_else(|e| {
+            log!(e:(2) "ReadImageError: {}", e);
+        });
+    let img_size = Position::from([repr_img.width(), repr_img.height()]);
+    let mut stdin = stdin().into_raw_mode().unwrap_or_else(|e| {
+        log!(e:(2) "GetStdInError: {}", e);
+    });
+    let is_alpha: bool = match repr_img.color() {
+        ColorType::L8 | ColorType::L16
+            | ColorType::Rgb8 | ColorType::Rgb16
+            | ColorType::Rgb32F
+            => false,
+        ColorType::La8
+            | ColorType::La16| ColorType::Rgba8
+            | ColorType::Rgba16 | ColorType::Rgba32F
+            => true,
+        t => log!(e:(2) "ColorTypeError: {:?}", t),
+    };
+    let mut is_start: bool = true;
+    let mut readbuf: [u8; 1] = [0];
+    'main: loop {
+        let mut term_size: Position
+            = Position::from(if let Some(size) = set_term_size {
+                [size.x, size.y * 2]
+            } else {
+                match dimensions() {
+                    Some(x) => [x.0 as SizeType, x.1 as SizeType * 2],
+                    None => {
+                        log!(e "GetTerminalSizeError. use default: {:?}",
+                             DEFAULT_TERM_SIZE);
+                        DEFAULT_TERM_SIZE
+                    },
+                }
+            });
+        if is_start {
+            eprint!("\x1b[{}S", term_size.y >> 1); // 滚动一个屏幕, 以空出空间
         }
-        match matches.value_of("colors") {
-            Some(x) => {
-                push!(x);
-            },
-            None => (),
-        };
-    }
-    if matches.is_present("output_colors") {
-        println!("{}", colors.keys().map(|x| format!("{}:{}", x, match colors.get(x) {
-            Some(x) => x,
-            None => {log!(e:(4) "MemError");},
-        })).collect::<Vec<String>>().join(","));
-        exit(0);
-    }
-
-    let opt_level: u8 = get_val!("opt_level", 1, parse);
-
-    // background color
-    let background_color: (u8, u8, u8)
-        = match matches.value_of("background_color") {
-            Some(x) => {
-                if x.len() != 6 {
-                    log!(e:(2) "HexColorLenError: len {} is not 6", x.len());
-                }
-                if let Some(n) = base16_to_unum(x) {
-                    num_to_rgb(n)
-                } else {
-                    log!(e:(2) "HexColorFormatError: {}", x);
-                }
-            },
-            _ => (0, 0, 0), // default value
-        };
-
-    let filter: FilterType
-        = get_val!("filter",
-            FilterType::Lanczos3,
-            get_filter);
-
-    type ImageCropType = [[f32; 2]; 2];
-    let crop_image_range: Option<ImageCropType>
-        = match matches.value_of("crop_image") {
-            Some(x) => {
-                fn get(x: &str) -> Option<ImageCropType> {
-                    let mut result: ImageCropType = [[0.0; 2]; 2];
-                    let mut tgt
-                        = x.split("-") .map(|x: &str| x.split(","));
-                    for i in 0..2 {
-                        let mut tgt2: std::str::Split<&str> = tgt.next()?;
-                        for j in 0..2 {
-                            result[i][j] = tgt2.next()?.parse().ok()?;
-                        }
-                        if let Some(_) = tgt2.next() { return None; }
-                    }
-                    if let Some(_) = tgt.next() { return None; }
-                    Some(result)
-                }
-                debug_assert_eq!(get("50,50-75,75.3"), Some([[50.0, 50.0], [75.0, 75.3]]));
-                if let Some(result) = get(x) {
-                    Some(result)
-                } else {
-                    log!(e:(2) "FormatError: {:?}", x);
-                }
-            },
-            None => None,
-    };
-
-
-    let img = match read_img(path) {
-        Ok(mut img) => {
-            let img: DynamicImage // 裁剪后的图片 (如果需要)
-                = if let Some(r) = crop_image_range {
-                    type T = f32;
-                    let (old_width, old_height)
-                        = (img.width() as T / 100.0, img.height() as T / 100.0);
-                    let (x, y): (T, T) = (r[0][0] * old_width, r[0][1] * old_height);
-                    let (new_width, new_height): (T, T)
-                        = (r[1][0] * old_width, r[1][1] * old_height);
-                    img.crop(x as u32, y as u32, new_width as u32, new_height as u32)
-                } else {img};
-            let (img_w, img_h): (u32, u32) 
-                = (img.width(), img.height());
-            (width, height)
-                = if abs_size {
-                    (width, height)
-                } else {
-                    image_size(
-                        (img_w, img_h),
-                        if has_set_size {
-                            (width, height)
-                        } else {
-                            (term_width, term_height)
-                    }, 0)
-                };
-            img.resize_exact(width, height, filter).into_rgba8()
-        },
-        Err(e) => {
-            log!(e:(2) "{}", e);
-        },
-    };
-
-    assert_eq!(width, img.width());
-    assert_eq!(height, img.height());
-
-    let width_usize: usize = width as usize;
-    let mut line_num: u32 = 0;
-    let mut bg_line_buffer: Vec<Rgb> = Vec::with_capacity(width_usize);
-    let mut fg_line_buffer: Vec<Rgb> = Vec::with_capacity(width_usize);
-    let mut mode: bool = false;
-    let mut skip_fg_line: bool = false;
-    let mut output_buffer: String = String::new();
-    macro_rules! out {
-        ( $( $x:expr ),* ) => (output_buffer.push_str(&format!( $($x),* )));
-    }
-    macro_rules! color_presets {
-        ( $x:expr ) => {
-            match colors.get(&$x) {
-                Some(x) => x.clone(),
-                None => $x,
-        }};
-    }
-    macro_rules! color {
-        (bf: $b:tt, $f:tt ) => {
-            format!("{}[{};{}m", ESC, color_presets!(
-                            format!("48;2;{};{};{}",
-                                $b.0, $b.1, $b.2)),
-                        color_presets!(
-                            format!("38;2;{};{};{}",
-                                $f.0, $f.1, $f.2)
-                            )
-        )};
-        (b: $b:tt ) => (
-            format!("{}[{}m", ESC, color_presets!(
-                    format!("48;2;{};{};{}", $b.0, $b.1, $b.2))));
-        (f: $f:tt ) => (
-            format!("{}[{}m", ESC, color_presets!(
-                    format!("38;2;{};{};{}", $f.0, $f.1, $f.2))));
-    }
-    let bg_ansi: String = color!(bf: background_color, background_color);
-    let clear_ansi: String = format!("{}[{}m",
-        ESC, color_presets!(String::from("0")));
-    output_buffer.push_str(&bg_ansi);
-    let (mut old_fg, mut old_bg): (Rgb, Rgb)
-        = (Rgb::from(background_color),
-            Rgb::from(background_color));
-    'a: for color in img.pixels() {
-        let mut tmp = Rgb::from(background_color);
-        tmp.set_from_rgba((color.0[0], color.0[1],
-                               color.0[2], color.0[3]));
+        clear_screen!();
+        term_size.y -= 2; // 缩小终端大小一文本行以留给状态行
+        let mut scale: Float = get_scale(term_size, img_size);
+        let mut win_pos: Position = Position::default(); // 在图片中的绝对像素
+        let mut screen_buf: ScreenBuffer
+            = ScreenBuffer::new(term_size.into_array());
+        screen_buf.cfg.chromatic_aberration = default_opt_level;
+        let mut back_ground_color_idx = 0;
+        let mut filter_idx = 4;
+        let [mut grayscale, mut invert] = [false; 2];
         loop {
-            match mode {
-                false => {
-                    bg_line_buffer.push(tmp);
-                    if bg_line_buffer.len() == width_usize {
-                        mode = true;
-                        line_num += 1;
-                        if line_num == height {
-                            skip_fg_line = true;
-                            continue;
-                        }
-                    }
-                },
-                true => { // output buffer
-                    if skip_fg_line {
-                        for _ in 0..width {
-                            fg_line_buffer.push(Rgb::from(background_color));
-                        }
-                    } else {
-                        fg_line_buffer.push(tmp);
-                    }
-                    if fg_line_buffer.len() == width_usize {
-                        mode = false;
-                        // output buffer color
-                        if split_edge {
-                            (old_fg, old_bg)
-                                = (Rgb::from(background_color),
-                                    Rgb::from(background_color));
-                        }
-                        let (mut fg, mut bg): (Rgb, Rgb);
-                        let (mut fg_similar, mut bg_similar): (bool, bool); // 是否相似
-                        let mut bg_fg_similar: bool;
-                        let mut target_char: &str;
-                        for i in 0..width_usize {
-                            bg = bg_line_buffer[i];
-                            fg = fg_line_buffer[i];
-                            (fg_similar, bg_similar)
-                                = (fg.is_similar(old_fg, opt_level),
-                                bg.is_similar(old_bg, opt_level));
-                            bg_fg_similar = enable_empty_char
-                                && fg.is_similar(bg, opt_level);
-
-                            target_char = if bg_fg_similar {
-                                empty_char
-                            } else {
-                                fg_char
-                            };
-
-                            // 更新上一色的缓存
-                            if ! fg_similar {
-                                old_fg = fg;
-                            }
-                            if ! bg_similar {
-                                old_bg = bg;
-                            }
-
-                            // to output_buffer
-                            if bg_similar && fg_similar {
-                                out!("{}", target_char);
-                            } else if fg_similar {
-                                out!("{}{}", color!(b: bg), target_char);
-                            } else if bg_similar {
-                                out!("{}{}", color!(f: fg), target_char);
-                            } else {
-                                out!("{}{}", color!(bf: bg, fg), target_char);
+            screen_buf.cfg.default_color
+                = Color::Rgb(back_grounds[back_ground_color_idx]);
+            let scale_term_size = term_size.mul_scale(scale);
+            let mut img
+                = repr_img.crop_imm(win_pos.x,
+                               win_pos.y,
+                               scale_term_size.x,
+                               scale_term_size.y)
+                .resize(
+                    term_size.x,
+                    term_size.y,
+                    FILTERS[filter_idx]);
+            if invert {
+                img.invert()
+            }
+            if grayscale {
+                img = img.grayscale()
+            }
+            { /* flush to screen buffer */
+                screen_buf.init_colors();
+                let mut count: usize = 0;
+                let img_width: usize = img.width() as usize;
+                let line_add_idx: usize = term_size.x as usize - img_width;
+                let mut i: usize = 0;
+                macro_rules! flush {
+                    ( $i:ident in $from:expr => $f:expr ) => {
+                        for $i in $from {
+                            screen_buf.set_idx(i, Color::Rgb($f));
+                            i += 1;
+                            count += 1;
+                            if count == img_width {
+                                i += line_add_idx;
+                                count = 0;
                             }
                         }
-                        bg_line_buffer.clear();
-                        fg_line_buffer.clear();
-                        line_num += 1;
-                        if line_num >= height {
-                            break 'a;
-                        }
-                        if split_edge {
-                            out!("{}{}{}", &clear_ansi, CR, &bg_ansi);
-                        } else {
-                            out!("{}", CR);
-                        }
-                    }
-                },
+                    };
+                }
+                if is_alpha {
+                    flush!(color in img.into_rgba8().pixels()
+                           => rgba_to_rgb(
+                               color.0,
+                               back_grounds[back_ground_color_idx]));
+                } else {
+                    flush!(color in img.into_rgb8().pixels() => color.0);
+                }
+            }
+            let status_line: String = format!(concat!(
+                    "\x1b[7m",
+                    "ImgSize[{}x{}] ",
+                    "Pos[{},{}] ",
+                    "Scale[{:.2}] ",
+                    "Opt[{}] ",
+                    "Fl[{}] ",
+                    "Help(H) ",
+                    "Quit(Q)",
+                    "\x1b[0m"),
+                    img_size.x, img_size.y,
+                    win_pos.x, win_pos.y,
+                    scale,
+                    screen_buf.cfg.chromatic_aberration,
+                    filter_idx);
+            eprint!("\x1b[H{}{}", screen_buf.flush(false), status_line);
+            is_start = false;
+            macro_rules! read_char {
+                () => {
+                    stdin.read_exact(&mut readbuf).unwrap_or_else(|e| {
+                        log!(e:(2) "ReadCharError: {}", e)
+                    })
+                };
+            }
+            read_char!();
+            let move_len: SizeType = {
+                let num = scale.ceil() as SizeType;
+                if num == 0 {
+                    1
+                } else {
+                    num
+                }
             };
-            break;
+            macro_rules! ctrl_err {
+                ( $( $x:expr ),* ) => {
+                    eprint!("\x07 \x1b[101m{}\x1b[0m",
+                            format!( $( $x ),* ))
+                };
+            }
+            let [moveb_wlen, moveb_hlen] = [
+                (scale_term_size.x as Float * short_move_ratio).ceil() as SizeType,
+                (scale_term_size.y as Float * short_move_ratio).ceil() as SizeType
+            ];
+            let [movec_wlen, movec_hlen] = [
+                (scale_term_size.x as Float * long_move_ratio).ceil() as SizeType,
+                (scale_term_size.y as Float * long_move_ratio).ceil() as SizeType
+            ];
+            match readbuf[0] as char {
+                'r' => {
+                    screen_buf.init_bg_colors();
+                    clear_screen!();
+                },
+                'R' => continue 'main,
+                'Q' => break, /* exit */
+                'h' => {
+                    let old = win_pos.x;
+                    win_pos.x -= move_len;
+                    if win_pos.x > old {
+                        win_pos.x = 0;
+                        ctrl_err!("RB");
+                    }
+                },
+                'j' => win_pos.y += move_len,
+                'k' => {
+                    let old = win_pos.y;
+                    win_pos.y -= move_len;
+                    if win_pos.y > old {
+                        win_pos.y = 0;
+                        ctrl_err!("RB");
+                    }
+                },
+                'l' => win_pos.x += move_len,
+
+                'a' => {
+                    let old = win_pos.x;
+                    win_pos.x -= moveb_wlen;
+                    if win_pos.x > old {
+                        win_pos.x = 0;
+                        ctrl_err!("RB");
+                    }
+                },
+                's' => win_pos.y += moveb_hlen,
+                'w' => {
+                    let old = win_pos.y;
+                    win_pos.y -= moveb_hlen;
+                    if win_pos.y > old {
+                        win_pos.y = 0;
+                        ctrl_err!("RB");
+                    }
+                },
+                'd' => win_pos.x += moveb_wlen,
+                'A' => {
+                    let old = win_pos.x;
+                    win_pos.x -= movec_wlen;
+                    if win_pos.x > old {
+                        win_pos.x = 0;
+                        ctrl_err!("RB");
+                    }
+                },
+                'S' => win_pos.y += movec_hlen,
+                'W' => {
+                    let old = win_pos.y;
+                    win_pos.y -= movec_hlen;
+                    if win_pos.y > old {
+                        win_pos.y = 0;
+                        ctrl_err!("RB");
+                    }
+                },
+                'D' => win_pos.x += movec_wlen,
+                '+' | 'c' => scale *= zoom_sub_ratio,
+                '-' | 'x' => scale *= zoom_add_ratio,
+                'o' => { /* opt */
+                    screen_buf.cfg.chromatic_aberration += 1;
+                }
+                'O' => { /* opt */
+                    screen_buf.cfg.chromatic_aberration += 10;
+                }
+                'i' => { /* opt */
+                    if screen_buf.cfg.chromatic_aberration != 0 {
+                        screen_buf.cfg.chromatic_aberration -= 1
+                    } else {
+                        ctrl_err!("FV")
+                    };
+                }
+                'I' => { /* opt */
+                    if screen_buf.cfg.chromatic_aberration >= 10 {
+                        screen_buf.cfg.chromatic_aberration -= 10
+                    } else {
+                        screen_buf.cfg.chromatic_aberration = 0;
+                        ctrl_err!("FV")
+                    };
+                }
+                'z' => {
+                    back_ground_color_idx += 1;
+                    back_ground_color_idx %= back_grounds.len();
+                },
+                'Z' => {
+                    back_ground_color_idx = 0;
+                },
+                'f' => {
+                    filter_idx += 1;
+                    filter_idx %= FILTERS.len();
+                },
+                'g' => repr_img = repr_img.fliph(),
+                'G' => repr_img = repr_img.flipv(),
+                'y' => repr_img = repr_img.rotate90(),
+                'Y' => repr_img = repr_img.rotate270(),
+                'm' => invert = ! invert,
+                'M' => grayscale = ! grayscale,
+                'H' | '?' => {
+                    // help
+                    clear_screen!();
+
+                    eprintln!("\x1b[H");
+                    macro_rules! outlines {
+                        ( $( $fmt:tt $( , $( $x:expr ),+ )? ; )* ) => {
+                            $(
+                                eprint!(
+                                    concat!("\x1b[G", $fmt, "\n\x1b[G")
+                                    $(, $( $x ),+ )?);
+                            )*
+                        };
+                    }
+                    let bgcolors_fmt = back_grounds
+                        .iter().map(
+                            |x|x.map(|s| format!("{:02X}", s))
+                            .concat())
+                        .collect::<Vec<_>>().join(",");
+                    outlines!{
+                        "{0}Help{0}", "-".repeat(((term_size.x - 4) >> 1) as usize);
+                        "Move: move px:`hjkl`, move 1/4 term: `aswd`, move 3/4 term: `ASWD`, s/l ratio: ({:.2},{:.2})",
+                            short_move_ratio, long_move_ratio;
+                        "Opt: add opt: `oO`, sub opt: `iI`";
+                        "Zoom: `cx` or `+-`, ratio: {:.4},{:.4}", zoom_add_ratio, zoom_sub_ratio;
+                        "ReDraw: `r`";
+                        "ReInit: `R`";
+                        "SwitchBackground: `z` [{}]", bgcolors_fmt;
+                        "InitBackground: `Z`";
+                        "SetFilter: `f`, ({:?}) {:?}", FILTERS[filter_idx], FILTERS;
+                        "FlipImage: `gG`";
+                        "Rotate: `yY`";
+                        "Invert: `m`";
+                        "Grayscale: `M`";
+                        "ThisHelpInfo: `H?`";
+                        "Quit: `Q`";
+                    };
+                    eprint!("\x1b[{}H", (term_size.y >> 1) + 1);
+
+                    read_char!();
+                    clear_screen!();
+                    screen_buf.init_bg_colors();
+                },
+                c => {
+                    ctrl_err!("EI:{:?}", c)
+                },
+            }
+            eprint!("\x1b[K"); // 清除残留状态行
         }
+        break;
     }
-    println!("{}{}", output_buffer, &clear_ansi);
+    eprintln!("\x1b[G"); // 退出时到头部换一行
 }

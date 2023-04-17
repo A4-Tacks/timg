@@ -6,6 +6,18 @@ use clap::{
 
 mod app;
 
+macro_rules! lines {
+    ( $first:tt $( $x:tt )* ) => {
+        concat!(
+            $first
+            $(
+                , "\n",
+                $x
+            )*
+        )
+    };
+}
+
 fn main() {
     let matches: ArgMatches
         = App::new(env!("CARGO_PKG_NAME"))
@@ -13,94 +25,64 @@ fn main() {
         .version(env!("CARGO_PKG_VERSION"))
         .author(env!("CARGO_PKG_AUTHORS"))
 
-        .arg(Arg::with_name("width")
-             .short("w")
-             .long("width")
-             .value_name("width")
-             .help("Set display image width")
-             .takes_value(true))
+        .arg(Arg::with_name("term_size")
+             .short("t")
+             .long("term-size")
+             .value_name("size")
+             .takes_value(true)
+             .help(lines!(
+                     "When this value is set, it will be used as the terminal size."
+                     "Format: (columns,lines)"
+                     "Example: 80,40")))
 
-        .arg(Arg::with_name("height")
-             .short("h")
-             .long("height")
-             .value_name("height")
-             .help("Set display image height")
-             .takes_value(true))
+        .arg(Arg::with_name("bgs")
+             .short("b")
+             .long("background-colors")
+             .value_name("colors")
+             .takes_value(true)
+             .help(lines!(
+                     "Set background colors."
+                     "Default: 000000,888888,ffffff")))
 
-        .arg(Arg::with_name("foreground")
-             .short("f")
-             .long("foreground")
-             .value_name("char")
-             .help("Set display foreground char")
-             .takes_value(true))
+        .arg(Arg::with_name("zoom_ratio")
+             .short("z")
+             .long("zoom-ratio")
+             .value_name("num")
+             .takes_value(true)
+             .help(lines!(
+                     "Number multiplied during scaling"
+                     "Range: 0 < num < 1"
+                     "Default: 0.8")))
+
+        .arg(Arg::with_name("short_move_ratio")
+             .short("s")
+             .long("short-move-ratio")
+             .value_name("num")
+             .takes_value(true)
+             .help(lines!(
+                     "short-move The distance to move at once is num screen sizes"
+                     "Range: num > 0"
+                     "Default: 0.25")))
 
         .arg(Arg::with_name("opt_level")
-             .short("d")
-             .long("optimization-level")
+             .short("o")
+             .long("opt-level")
              .value_name("level")
-             .help(concat!(
-                 "Set optimization level\n",
-                 "(default:1) [0, 255]"))
-             .takes_value(true))
+             .takes_value(true)
+             .help(lines!(
+                     "Default optimization level"
+                     "Range: num >= 0"
+                     "Default: 60")))
 
-        .arg(Arg::with_name("background_color")
-             .short("b")
-             .long("background-color")
-             .value_name("color")
-             .help(concat!(
-                "Display image background color\n",
-                "(default:000000)"))
-             .takes_value(true))
-
-        .arg(Arg::with_name("no_split_edge")
-             .short("s")
-             .long("no-split-edge")
-             .help("No split edge"))
-
-        .arg(Arg::with_name("filter")
-             .short("t")
-             .long("filter")
-             .value_name("id")
-             .help(concat!(
-                 "Type of filter used\n",
-                 "0: Nearest (quick)\n",
-                 "1: Triangle\n",
-                 "2: CatmullRom\n",
-                 "3: Gaussian\n",
-                 "4: Lanczos3 (default)",
-             ))
-             .takes_value(true))
-
-        .arg(Arg::with_name("colors")
-             .long("colors")
-             .value_name("colors")
-             .help(concat!(
-                     "Define color output.\n",
-                     "format: 38;2;0;0;0:30,48;2;0;0;0:40"
-                     ))
-             .takes_value(true))
-
-        .arg(Arg::with_name("output_colors")
-             .long("output-colors"))
-
-        .arg(Arg::with_name("disable_default_colors")
-             .long("disable-default-colors"))
-
-        .arg(Arg::with_name("empty_char")
-             .long("empty-char")
-             .value_name("char")
-             .help(r"Set empty char\n(default:\x20)")
-             .takes_value(true))
-
-        .arg(Arg::with_name("disable_empty_char")
-             .long("disable-empty-char"))
-
-        .arg(Arg::with_name("crop_image")
-             .short("c")
-             .long("crop-image")
-             .value_name("range")
-             .help("crop image\n(format:-c 'x,y-w,h') (0f-100f)")
-             .takes_value(true))
+        .arg(Arg::with_name("long_move_ratio")
+             .short("l")
+             .long("long-move-ratio")
+             .value_name("num")
+             .takes_value(true)
+             .help(lines!(
+                     "long-move The distance to move at once is num screen sizes"
+                     "Range: num > 0"
+                     "Default: 0.75")))
 
         .args(&[
             Arg::with_name("FILE").index(1)
