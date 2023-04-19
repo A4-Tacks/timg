@@ -182,8 +182,9 @@ impl FmtColor for Color {
     /// # use term_lattice::Color;
     /// # use timg::FmtColor;
     /// assert_eq!(Color::None.fmt_color(), "None");
-    /// assert_eq!(Color::Rgb([0xff, 0x1b, 0x0a]).fmt_color(), "#FF1B0A");
-    /// assert_eq!(Color::C256(84).fmt_color(), "C084");
+    /// assert_eq!(Color::Rgb([0xff, 0x1b, 0x0a]).fmt_color(),
+    ///     "\x1b[48;2;255;27;10m#\x1b[49mFF1B0A");
+    /// assert_eq!(Color::C256(84).fmt_color(), "\x1b[48;5;84mC\x1b[49m084");
     /// ```
     fn fmt_color(&self) -> String {
         match self {
