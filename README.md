@@ -1,6 +1,6 @@
 The image viewer on the terminal is based on the VT100 standard.
 
-# Function
+# Functions
 - Zoom Picture
 - Rotate Picture
 - Mirror image
