@@ -12,9 +12,9 @@ The image viewer on the terminal is based on the VT100 standard.
 
 
 # Rendering
-- Video: <https://www.bilibili.com/video/BV1yg4y1j7AC>
 ![example1](https://raw.githubusercontent.com/A4-Tacks/timg/main/Examples/Example1.png)
 ![example2](https://raw.githubusercontent.com/A4-Tacks/timg/main/Examples/Example2.png)
+![example3](https://raw.githubusercontent.com/A4-Tacks/timg/main/Examples/Example3.gif)
 
 
 # Info
