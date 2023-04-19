@@ -1,3 +1,5 @@
+use term_lattice::Color;
+
 pub type SizeType = u32;
 pub type Float = f64;
 
@@ -167,4 +169,29 @@ pub fn num_to_rgb(num: u32) -> [u8; 3] {
     [((num >> 16) & 0xff) as u8,
      ((num >> 8) & 0xff) as u8,
      (num & 0xff) as u8]
+}
+
+
+pub trait FmtColor {
+    fn fmt_color(&self) -> String;
+}
+impl FmtColor for Color {
+    /// format color
+    /// # Examples
+    /// ```
+    /// # use term_lattice::Color;
+    /// # use timg::FmtColor;
+    /// assert_eq!(Color::None.fmt_color(), "None");
+    /// assert_eq!(Color::Rgb([0xff, 0x1b, 0x0a]).fmt_color(), "#FF1B0A");
+    /// assert_eq!(Color::C256(84).fmt_color(), "C084");
+    /// ```
+    fn fmt_color(&self) -> String {
+        match self {
+            Self::None => format!("None"),
+            Self::Rgb(x)
+                => format!("\x1b[48;2;{0};{1};{2}m#\x1b[49m{:02X}{:02X}{:02X}",
+                           x[0], x[1], x[2]),
+            Self::C256(x) => format!("\x1b[48;5;{0}mC\x1b[49m{:03}", x),
+        }
+    }
 }

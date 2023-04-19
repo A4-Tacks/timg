@@ -16,7 +16,7 @@ use term_lattice::{
     Color,
     types::Rgb
 };
-use timg::{ESC, base16_to_unum, num_to_rgb};
+use timg::{ESC, base16_to_unum, num_to_rgb, FmtColor};
 use clap::ArgMatches;
 use term_size::dimensions;
 use timg::{
@@ -92,7 +92,7 @@ pub fn run(matches: ArgMatches) {
         };
     }
 
-    let back_grounds: &[Rgb] = &get_value!("bgs", "000000,888888,ffffff")
+    let rgb_back_grounds: Vec<Rgb> = get_value!("bgs", "000000,888888,ffffff")
         .split(",").map(|s| {
             if s.len() != 6 {
                 log!(e:(3) "StrLenError: {:?} length is {}, need 6.", s, s.len())
@@ -100,7 +100,12 @@ pub fn run(matches: ArgMatches) {
             num_to_rgb(base16_to_unum(s).unwrap_or_else(|| {
                 log!(e:(3) "StrToHexError: {:?} is not a base16 string.", s)
             }))
-        }).collect::<Vec<_>>()[..];
+        }).collect::<Vec<_>>();
+    let mut back_grounds: Vec<Color> = Vec::with_capacity(rgb_back_grounds.len() + 1);
+    back_grounds.push(Color::None);
+    for i in rgb_back_grounds {
+        back_grounds.push(Color::Rgb(i))
+    }
     let zoom_sub_ratio = {
         let s = get_value!("zoom_ratio", "0.8");
         let num: Float = s.parse().unwrap_or_else(
@@ -216,7 +221,7 @@ pub fn run(matches: ArgMatches) {
         let [mut grayscale, mut invert] = [false; 2];
         loop {
             screen_buf.cfg.default_color
-                = Color::Rgb(back_grounds[back_ground_color_idx]);
+                = back_grounds[back_ground_color_idx];
             let scale_term_size = term_size.mul_scale(scale);
             let mut img
                 = repr_img.crop_imm(win_pos.x,
@@ -252,11 +257,19 @@ pub fn run(matches: ArgMatches) {
                         }
                     };
                 }
-                if is_alpha {
+                let rgb
+                    = if let Color::Rgb(x)
+                    = back_grounds[back_ground_color_idx] {
+                    Some(x)
+                } else {
+                    None
+                };
+                if rgb.is_some() && is_alpha {
+                    let rgb = rgb.unwrap();
                     flush!(color in img.into_rgba8().pixels()
                            => rgba_to_rgb(
                                color.0,
-                               back_grounds[back_ground_color_idx]));
+                               rgb));
                 } else {
                     flush!(color in img.into_rgb8().pixels() => color.0);
                 }
@@ -424,11 +437,9 @@ pub fn run(matches: ArgMatches) {
                             )*
                         };
                     }
-                    let bgcolors_fmt = back_grounds
-                        .iter().map(
-                            |x|x.map(|s| format!("{:02X}", s))
-                            .concat())
-                        .collect::<Vec<_>>().join(",");
+                    let bgs_fmt = back_grounds.iter()
+                        .map(|x| x.fmt_color())
+                        .collect::<Vec<_>>().join(", ");
                     outlines!{
                         "{0}Help{0}", "-".repeat(((term_size.x - 4) >> 1) as usize);
                         "Move: move px:`hjkl`, move 1/4 term: `aswd`, move 3/4 term: `ASWD`, s/l ratio: ({:.2},{:.2})",
@@ -437,7 +448,7 @@ pub fn run(matches: ArgMatches) {
                         "Zoom: `cx` or `+-`, ratio: {:.4},{:.4}", zoom_add_ratio, zoom_sub_ratio;
                         "ReDraw: `r`";
                         "ReInit: `R`";
-                        "SwitchBackground: `z` [{}]", bgcolors_fmt;
+                        "SwitchBackground: `z` [{}]", bgs_fmt;
                         "InitBackground: `Z`";
                         "SetFilter: `f`, ({:?}) {:?}", FILTERS[filter_idx], FILTERS;
                         "FlipImage: `gG`";
