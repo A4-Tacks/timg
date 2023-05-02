@@ -1,4 +1,5 @@
-The image viewer on the terminal is based on the VT100 standard.
+The image viewer on the terminal is based on the xterm standard.
+This is an interactive image viewer with very fast IO speed on the terminal, utilizing incremental output and other methods to significantly reduce IO data. It can perform well on low-speed terminals.
 
 # Functions
 - Zoom Picture
@@ -20,4 +21,4 @@ The image viewer on the terminal is based on the VT100 standard.
 # Info
 crate: <https://crates.io/crates/timg>
 
-Due to the current implementation of reading one character at a time being unavailable on Windows, it may result in the software being unavailable or not meeting expectations on Windows.
+Due to the current implementation of the software reading one character at a time appearing to be unavailable on Windows systems, it may result in the software being unavailable or not meeting your expectations when running on Windows systems.
