@@ -1,11 +1,11 @@
 [package]
 name = "timg"
-version = "2.0.1"
+version = "2.1.0"
 edition = "2021"
 
 authors = ["A4-Tacks <wdsjxhno1001@163.com>"]
-keywords = ["terminal", "image", "term", "tui", "viewer"]
-description = "Picture viewer for terminal (VT100)."
+keywords = ["terminal", "image", "ansi_term", "tui", "viewer"]
+description = "Interactive Image Viewer on Terminal (xterm)"
 categories = ["command-line-utilities"]
 
 license = "MIT"

@@ -25,10 +25,7 @@ use timg::{
     Position,
     Float,
 };
-use image::{
-    imageops::FilterType,
-    ColorType
-};
+use image::imageops::FilterType;
 
 
 const FILTERS: &[FilterType] = &[
@@ -38,7 +35,6 @@ const FILTERS: &[FilterType] = &[
 ];
 
 pub type Rgba = [u8; 4];
-
 
 /// RGBA color to RGB color
 /// # Examples
@@ -68,7 +64,7 @@ pub fn rgba_to_rgb(foreground: Rgba, background: Rgb) -> Rgb {
 }
 
 
-#[macro_export]
+/// 输出信息
 macro_rules! log {
     (e:($code:expr) $( $x:expr ),* ) => {{
         log!(e $($x),* );
@@ -77,6 +73,27 @@ macro_rules! log {
     (e $( $x:expr ),* ) => (
         eprintln!( "{}[1;91m{}{0}[0m",
                    ESC, format!($($x),*) ))
+}
+
+/// 声明一个可变的变量, 并且在声明时声明一个宏用于之后的重复初始化
+/// 可同时声明多次
+macro_rules! new_and_init_macro {
+    (
+        $(
+            let mut $name:ident $(: $ty:ty )?
+                => $init_macro:ident = $value:expr;
+        )*
+    ) => {
+        $(
+            let mut $name $(: $ty)?;
+            macro_rules! $init_macro {
+                () => {
+                    $name = $value;
+                }
+            }
+            $init_macro!();
+        )*
+    };
 }
 
 
@@ -179,21 +196,11 @@ pub fn run(matches: ArgMatches) {
     let mut stdin = stdin().into_raw_mode().unwrap_or_else(|e| {
         log!(e:(2) "GetStdInError: {}", e);
     });
-    let is_alpha: bool = match repr_img.color() {
-        ColorType::L8 | ColorType::L16
-            | ColorType::Rgb8 | ColorType::Rgb16
-            | ColorType::Rgb32F
-            => false,
-        ColorType::La8
-            | ColorType::La16| ColorType::Rgba8
-            | ColorType::Rgba16 | ColorType::Rgba32F
-            => true,
-        t => log!(e:(2) "ColorTypeError: {:?}", t),
-    };
+    let is_alpha: bool = repr_img.color().has_alpha();
     let mut is_start: bool = true;
     let mut readbuf: [u8; 1] = [0];
-    'main: loop {
-        let mut term_size: Position
+    'main: loop { // 部分参数初始化将在这个头部进行
+        let mut term_size: Position /* 终端的大小, 按像素算 */
             = Position::from(if let Some(size) = set_term_size {
                 [size.x, size.y * 2]
             } else {
@@ -209,16 +216,21 @@ pub fn run(matches: ArgMatches) {
         if is_start {
             eprint!("\x1b[{}S", term_size.y >> 1); // 滚动一个屏幕, 以空出空间
         }
-        clear_screen!();
         term_size.y -= 2; // 缩小终端大小一文本行以留给状态行
-        let mut scale: Float = get_scale(term_size, img_size);
-        let mut win_pos: Position = Position::default(); // 在图片中的绝对像素
+        let full_scale: Float = get_scale(term_size, img_size);
+        clear_screen!();
+        new_and_init_macro!{
+            // scale alias ratio.
+            let mut scale: Float => init_scale = full_scale;
+            let mut back_ground_color_idx => init_back_ground_color_idx = 0;
+            let mut win_pos: Position => init_win_pos = Position::default(); // 在图片中的绝对像素
+        }
         let mut screen_buf: ScreenBuffer
             = ScreenBuffer::new(term_size.into_array());
         screen_buf.cfg.chromatic_aberration = default_opt_level;
-        let mut back_ground_color_idx = 0;
         let mut filter_idx = 4;
         let [mut grayscale, mut invert] = [false; 2];
+        let mut error_buf: String = String::new();
         loop {
             screen_buf.cfg.default_color
                 = back_grounds[back_ground_color_idx];
@@ -278,17 +290,19 @@ pub fn run(matches: ArgMatches) {
                     "\x1b[7m",
                     "ImgSize[{}x{}] ",
                     "Pos[{},{}] ",
-                    "Scale[{:.2}] ",
+                    "Ratio[{:.2}] ",
                     "Opt[{}] ",
                     "Fl[{}] ",
                     "Help(H) ",
                     "Quit(Q)",
-                    "\x1b[0m"),
+                    "\x1b[0m\x1b[s{}\x1b[K\x1b[u"),
                     img_size.x, img_size.y,
                     win_pos.x, win_pos.y,
                     scale,
                     screen_buf.cfg.chromatic_aberration,
-                    filter_idx);
+                    filter_idx,
+                    error_buf);
+            error_buf.clear();
             eprint!("\x1b[H{}{}", screen_buf.flush(false), status_line);
             is_start = false;
             macro_rules! read_char {
@@ -309,9 +323,29 @@ pub fn run(matches: ArgMatches) {
             };
             macro_rules! ctrl_err {
                 ( $( $x:expr ),* ) => {
-                    eprint!("\x07 \x1b[101m{}\x1b[0m",
-                            format!( $( $x ),* ))
+                    error_buf.extend(
+                        format!("\x07 \x1b[101m{}\x1b[0m",
+                                format!( $( $x ),* )).chars())
                 };
+            }
+            /// <: new < old
+            /// >: new > old
+            /// note 一轮中仅可运行一次,
+            /// 并且仅在 scale_term_size 未改变, scale 已改变时使用
+            macro_rules! fix_pos {
+                (<) => {{
+                    win_pos += (scale_term_size
+                                - term_size.mul_scale(scale))
+                        >> 1.into();
+                }};
+                (>) => {{
+                    let old: Position = win_pos;
+                    win_pos -= (term_size.mul_scale(scale)
+                                - scale_term_size)
+                        >> 1.into();
+                    if win_pos.x > old.x { win_pos.x = 0 }
+                    if win_pos.y > old.y { win_pos.y = 0 }
+                }};
             }
             let [moveb_wlen, moveb_hlen] = [
                 (scale_term_size.x as Float * short_move_ratio).ceil() as SizeType,
@@ -321,13 +355,14 @@ pub fn run(matches: ArgMatches) {
                 (scale_term_size.x as Float * long_move_ratio).ceil() as SizeType,
                 (scale_term_size.y as Float * long_move_ratio).ceil() as SizeType
             ];
-            match readbuf[0] as char {
+            // 将在此处阻塞等待输入
+            match readbuf[0] as char { // 处理读入的单个字符
                 'r' => {
                     screen_buf.init_bg_colors();
                     clear_screen!();
                 },
                 'R' => continue 'main,
-                'Q' => break, /* exit */
+                'Q' | '\x03' => break, /* exit */
                 'h' => {
                     let old = win_pos.x;
                     win_pos.x -= move_len;
@@ -383,22 +418,38 @@ pub fn run(matches: ArgMatches) {
                     }
                 },
                 'D' => win_pos.x += movec_wlen,
-                '+' | 'c' => scale *= zoom_sub_ratio,
-                '-' | 'x' => scale *= zoom_add_ratio,
-                'o' => { /* opt */
+
+                // 缩放
+                // 放大(比例与视区缩小 new < old) p += (old - new) >> 1
+                '+' | 'c' => {
+                    scale *= zoom_sub_ratio;
+                    fix_pos!(<);
+                },
+                // 缩小(比例与视区放大 old < new) p -= (new - old) >> 1
+                '-' | 'x' => {
+                    scale *= zoom_add_ratio;
+                    if scale > full_scale {
+                        // 防止将图片缩的过小
+                        init_scale!();
+                        ctrl_err!("RC");
+                    }
+                    fix_pos!(>);
+                },
+
+                'o' => { /* opt add */
                     screen_buf.cfg.chromatic_aberration += 1;
                 }
-                'O' => { /* opt */
+                'O' => { /* opt add */
                     screen_buf.cfg.chromatic_aberration += 10;
                 }
-                'i' => { /* opt */
+                'i' => { /* opt sub */
                     if screen_buf.cfg.chromatic_aberration != 0 {
                         screen_buf.cfg.chromatic_aberration -= 1
                     } else {
                         ctrl_err!("FV")
                     };
                 }
-                'I' => { /* opt */
+                'I' => { /* opt sub */
                     if screen_buf.cfg.chromatic_aberration >= 10 {
                         screen_buf.cfg.chromatic_aberration -= 10
                     } else {
@@ -411,7 +462,7 @@ pub fn run(matches: ArgMatches) {
                     back_ground_color_idx %= back_grounds.len();
                 },
                 'Z' => {
-                    back_ground_color_idx = 0;
+                    init_back_ground_color_idx!();
                 },
                 'f' => {
                     filter_idx += 1;
@@ -423,13 +474,26 @@ pub fn run(matches: ArgMatches) {
                 'Y' => repr_img = repr_img.rotate270(),
                 'm' => invert = ! invert,
                 'M' => grayscale = ! grayscale,
+                'X' => {
+                    init_scale!();
+                    init_win_pos!();
+                },
+                'C' => {
+                    let old_scale = scale;
+                    scale = 1.0;
+                    if scale < old_scale {
+                        fix_pos!(<)
+                    } else {
+                        fix_pos!(>)
+                    }
+                },
                 'H' | '?' => {
                     // help
                     clear_screen!();
 
                     eprintln!("\x1b[H");
                     macro_rules! outlines {
-                        ( $( $fmt:tt $( , $( $x:expr ),+ )? ; )* ) => {
+                        ( $( $fmt:expr $( , $( $x:expr ),+ )? ; )* ) => {
                             $(
                                 eprint!(
                                     concat!("\x1b[G", $fmt, "\n\x1b[G")
@@ -441,22 +505,29 @@ pub fn run(matches: ArgMatches) {
                         .map(|x| x.fmt_color())
                         .collect::<Vec<_>>().join(", ");
                     outlines!{
-                        "{0}Help{0}", "-".repeat(((term_size.x - 4) >> 1) as usize);
-                        "Move: move px:`hjkl`, move 1/4 term: `aswd`, move 3/4 term: `ASWD`, s/l ratio: ({:.2},{:.2})",
+                        "{0}Help{0}", "-".repeat(
+                            ((term_size.x - 4) >> 1) as usize);
+                        concat!(
+                            "Move: move px:`hjkl`, move 1/4 term: `aswd`, ",
+                            "move 3/4 term: `ASWD`, s/l ratio: ({:.2},{:.2})"),
                             short_move_ratio, long_move_ratio;
                         "Opt: add opt: `oO`, sub opt: `iI`";
-                        "Zoom: `cx` or `+-`, ratio: {:.4},{:.4}", zoom_add_ratio, zoom_sub_ratio;
+                        "Zoom: `cx` or `+-`, ratio: {:.4},{:.4}",
+                            zoom_add_ratio, zoom_sub_ratio;
                         "ReDraw: `r`";
                         "ReInit: `R`";
                         "SwitchBackground: `z` [{}]", bgs_fmt;
                         "InitBackground: `Z`";
-                        "SetFilter: `f`, ({:?}) {:?}", FILTERS[filter_idx], FILTERS;
+                        "SetFilter: `f`, ({:?}) {:?}",
+                            FILTERS[filter_idx], FILTERS;
                         "FlipImage: `gG`";
                         "Rotate: `yY`";
                         "Invert: `m`";
                         "Grayscale: `M`";
                         "ThisHelpInfo: `H?`";
-                        "Quit: `Q`";
+                        "InitRatio: `X`";
+                        "UnitRatio: `C`";
+                        "Quit: `Q` or `Ctrl-C`";
                     };
                     eprint!("\x1b[{}H", (term_size.y >> 1) + 1);
 
@@ -468,7 +539,6 @@ pub fn run(matches: ArgMatches) {
                     ctrl_err!("EI:{:?}", c)
                 },
             }
-            eprint!("\x1b[K"); // 清除残留状态行
         }
         break;
     }
