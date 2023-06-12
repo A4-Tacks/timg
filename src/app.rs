@@ -3,29 +3,31 @@
 /// note: lines is not text line, it is pixel line
 pub const DEFAULT_TERM_SIZE: [SizeType; 2] = [80, 80];
 
-use std::{
-    io::{
+use ::{
+    clap::ArgMatches,
+    image::imageops::FilterType,
+    raw_tty::IntoRawMode,
+    std::io::{
         stdin,
         Read
-    }
+    },
+    term_lattice::{
+        types::Rgb,
+        Color,
+        ScreenBuffer
+    },
+    term_size::dimensions,
+    timg::{
+        base16_to_unum,
+        get_scale,
+        num_to_rgb,
+        Float,
+        FmtColor,
+        Position,
+        SizeType,
+        ESC
+    },
 };
-
-use raw_tty::IntoRawMode;
-use term_lattice::{
-    ScreenBuffer,
-    Color,
-    types::Rgb
-};
-use timg::{ESC, base16_to_unum, num_to_rgb, FmtColor};
-use clap::ArgMatches;
-use term_size::dimensions;
-use timg::{
-    get_scale,
-    SizeType,
-    Position,
-    Float,
-};
-use image::imageops::FilterType;
 
 
 const FILTERS: &[FilterType] = &[
@@ -110,7 +112,7 @@ pub fn run(matches: ArgMatches) {
     }
 
     let rgb_back_grounds: Vec<Rgb> = get_value!("bgs", "000000,888888,ffffff")
-        .split(",").map(|s| {
+        .split(',').map(|s| {
             if s.len() != 6 {
                 log!(e:(3) "StrLenError: {:?} length is {}, need 6.", s, s.len())
             }
@@ -155,14 +157,14 @@ pub fn run(matches: ArgMatches) {
         let s = get_value!("opt_level", "60");
         let num: SizeType = s.parse().unwrap_or_else(
             |e| log!(e:(3) "StrToIntError: {}", e));
-        if num <= 0 {
+        if num == 0 {
             log!(e:(3) "NumberOutOfRange: {} not in [0,inf)", num)
         }
         num
     };
     let set_term_size: Option<Position> = {
         if let Some(size) = get_value!("term_size") {
-            let nums = size.split(",")
+            let nums = size.split(',')
                 .map(|n| n.parse::<SizeType>()
                      .unwrap_or_else(
                          |e|
@@ -276,14 +278,16 @@ pub fn run(matches: ArgMatches) {
                 } else {
                     None
                 };
-                if rgb.is_some() && is_alpha {
-                    let rgb = rgb.unwrap();
-                    flush!(color in img.into_rgba8().pixels()
-                           => rgba_to_rgb(
-                               color.0,
-                               rgb));
-                } else {
-                    flush!(color in img.into_rgb8().pixels() => color.0);
+                match rgb {
+                    Some(rgb) if is_alpha => {
+                        flush!(color in img.into_rgba8().pixels()
+                               => rgba_to_rgb(
+                                   color.0,
+                                   rgb));
+                    }
+                    _ => {
+                        flush!(color in img.into_rgb8().pixels() => color.0);
+                    }
                 }
             }
             let status_line: String = format!(concat!(

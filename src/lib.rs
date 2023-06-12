@@ -21,7 +21,7 @@ mod traits {
         /// ```
         fn fmt_color(&self) -> String {
             match self {
-                Self::None => format!("None"),
+                Self::None => "None".to_string(),
                 Self::Rgb(x)
                     => format!("\x1b[48;2;{0};{1};{2}m#\x1b[49m{:02X}{:02X}{:02X}",
                                x[0], x[1], x[2]),
